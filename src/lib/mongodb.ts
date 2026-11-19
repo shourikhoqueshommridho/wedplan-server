@@ -43,3 +43,17 @@ export async function getDb(): Promise<Db> {
   const client = await getClient()
   return client.db(process.env.MONGODB_DB?.trim() || DEFAULT_DB_NAME)
 }
+
+/**
+ * Closes the shared client so short-lived scripts (for example `set-role`)
+ * exit instead of keeping the process alive. The API server never calls this.
+ */
+export async function closeDb(): Promise<void> {
+  const pendingClient = cache.clientPromise
+  cache.clientPromise = undefined
+
+  if (!pendingClient) return
+
+  const client = await pendingClient
+  await client.close()
+}
