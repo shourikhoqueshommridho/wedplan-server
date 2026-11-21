@@ -28,7 +28,9 @@ export function getClientUrl(): string {
 }
 
 export function getTrustedOrigins(): string[] {
-  return Array.from(new Set([getAuthBaseUrl(), getClientUrl(), "http://localhost:3000"]))
+  // Both helpers default to localhost when no origin is configured, so the
+  // development origin stays trusted without hardcoding it in production.
+  return Array.from(new Set([getAuthBaseUrl(), getClientUrl()]))
 }
 
 function googleProvider():
