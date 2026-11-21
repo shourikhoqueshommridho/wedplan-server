@@ -89,7 +89,13 @@ export const vendorServiceSchema = z.object({
     .max(8, "Add no more than 8 images."),
 })
 
-export const vendorServiceUpdateSchema = vendorServiceSchema
+/**
+ * Vendors may edit their own content and control availability, but moderation
+ * status is reserved for admins. `status` is deliberately not accepted here.
+ */
+export const vendorServiceUpdateSchema = vendorServiceSchema.partial().extend({
+  isActive: z.boolean().optional(),
+})
 
 export const objectIdSchema = z
   .string()

@@ -9,7 +9,9 @@ import {
   objectIdSchema,
   vendorProfileUpdateSchema,
   vendorServiceSchema,
+  vendorServiceUpdateSchema,
 } from "../validators/vendor.js"
+import { serviceQuerySchema } from "../validators/service-query.js"
 
 const vendorRouter = Router()
 
@@ -91,10 +93,35 @@ vendorRouter.put("/profile", async (req, res, next) => {
 
 vendorRouter.get("/services", async (req, res, next) => {
   try {
+    const query = serviceQuerySchema.safeParse(req.query)
+    if (!query.success) {
+      res.status(400).json({
+        success: false,
+        message: "Invalid query parameters.",
+        errors: query.error.issues.map((issue) => ({
+          field: issue.path.map(String).join("."),
+          message: issue.message,
+        })),
+      })
+      return
+    }
+
     const db = await getDb()
+    const filter: Filter<VendorServiceDocument> = { vendorId: req.auth!.user.id }
+
+    if (query.data.search) {
+      filter.serviceName = { $regex: query.data.search, $options: "i" }
+    }
+    if (query.data.category) {
+      filter.category = query.data.category
+    }
+    if (query.data.status) {
+      filter.status = query.data.status
+    }
+
     const documents = await db
       .collection<VendorServiceDocument>("services")
-      .find({ vendorId: req.auth!.user.id })
+      .find(filter)
       .sort({ createdAt: -1 })
       .toArray()
 
@@ -158,7 +185,7 @@ vendorRouter.post("/services", async (req, res, next) => {
 
 vendorRouter.patch("/services/:id", async (req, res, next) => {
   const parsedId = objectIdSchema.safeParse(req.params.id)
-  const parsedBody = vendorServiceSchema.safeParse(req.body)
+  const parsedBody = vendorServiceUpdateSchema.safeParse(req.body)
 
   if (!parsedId.success) {
     res.status(400).json({ success: false, message: "Invalid service ID." })
@@ -184,14 +211,43 @@ vendorRouter.patch("/services/:id", async (req, res, next) => {
       $and: [serviceIdFilter(parsedId.data), { vendorId: req.auth!.user.id }],
     }
 
-    const result = await collection.updateOne(filter, {
-      $set: {
-        ...parsedBody.data,
-        status: "pending",
-        isActive: true,
-        updatedAt: new Date(),
-      },
-    })
+    const existing = await collection.findOne(filter)
+    if (!existing) {
+      res.status(404).json({ success: false, message: "Service not found." })
+      return
+    }
+
+    const updateData = parsedBody.data
+    const contentFieldsChanged =
+      "serviceName" in updateData ||
+      "category" in updateData ||
+      "description" in updateData ||
+      "price" in updateData ||
+      "location" in updateData ||
+      "images" in updateData
+
+    const updateSet: Record<string, unknown> = {
+      ...updateData,
+      updatedAt: new Date(),
+    }
+
+    const isInactive = existing.status === "inactive" || !existing.isActive
+
+    if (contentFieldsChanged) {
+      // Any content edit must go back through admin review before going public.
+      updateSet.status = "pending"
+      updateSet.isActive = true
+    } else if (updateData.isActive === true && isInactive) {
+      // Reactivating a delisted service is a fresh submission, not a bypass of
+      // moderation: it re-enters the queue as pending.
+      updateSet.status = "pending"
+      updateSet.isActive = true
+    } else if (updateData.isActive === false) {
+      updateSet.status = "inactive"
+      updateSet.isActive = false
+    }
+
+    const result = await collection.updateOne(filter, { $set: updateSet })
 
     if (result.matchedCount === 0) {
       res.status(404).json({ success: false, message: "Service not found." })
@@ -204,7 +260,9 @@ vendorRouter.patch("/services/:id", async (req, res, next) => {
       success: true,
       data: {
         service: document ? toVendorService(document) : null,
-        message: "Service updated and sent for approval.",
+        message: contentFieldsChanged
+          ? "Service updated and sent for approval."
+          : "Service updated.",
       },
     })
   } catch (error) {

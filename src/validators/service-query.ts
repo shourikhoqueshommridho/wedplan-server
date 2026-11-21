@@ -8,6 +8,7 @@ import { z } from "zod"
 export const serviceQuerySchema = z.object({
   search: z.string().trim().max(120).optional(),
   category: z.string().trim().max(80).optional(),
+  status: z.string().trim().max(40).optional(),
   location: z.string().trim().max(160).optional(),
   sort: z.enum(["asc", "desc"]).optional(),
 })
