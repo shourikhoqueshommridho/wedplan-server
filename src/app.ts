@@ -2,7 +2,7 @@ import express, { type NextFunction, type Request, type Response } from "express
 import cors from "cors";
 import helmet from "helmet";
 
-import { getAuthHandler } from "./lib/auth.js";
+import { getAuthHandler, getTrustedOrigins } from "./lib/auth.js";
 import accountRouter from "./routes/account.routes.js";
 import adminRouter from "./routes/admin.routes.js";
 import bookingRouter from "./routes/booking.routes.js";
@@ -17,7 +17,7 @@ app.use(helmet());
 
 app.use(
   cors({
-    origin: process.env.CLIENT_URL || "http://localhost:3000",
+    origin: getTrustedOrigins(),
     credentials: true,
   })
 );

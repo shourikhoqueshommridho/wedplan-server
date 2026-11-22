@@ -14,22 +14,57 @@ function trimTrailingSlashes(value: string): string {
   return value.replace(/\/+$/, "")
 }
 
+function isLocalOrigin(value: string): boolean {
+  return /^https?:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?\/?$/i.test(value)
+}
+
+/** Vercel exposes its deployment host without a scheme. */
+function getVercelOrigin(): string | null {
+  const configured =
+    process.env.VERCEL_PRODUCTION_URL?.trim() || process.env.VERCEL_URL?.trim()
+  if (!configured) return null
+
+  const host = trimTrailingSlashes(configured.replace(/^https?:\/\//i, ""))
+  return host ? `https://${host}` : null
+}
+
+/**
+ * Resolve a browser-facing origin. An explicit non-local value always wins.
+ * A localhost value in production is the stale development default, so derive
+ * the public origin from the Vercel host instead of breaking callbacks/CORS.
+ */
+function resolvePublicOrigin(configured: string | undefined, fallback: string): string {
+  const value = configured?.trim()
+  const isProduction = process.env.NODE_ENV === "production"
+
+  if (value && !(isProduction && isLocalOrigin(value))) {
+    return trimTrailingSlashes(value)
+  }
+
+  if (isProduction) {
+    const vercelOrigin = getVercelOrigin()
+    if (vercelOrigin) return vercelOrigin
+  }
+
+  return trimTrailingSlashes(fallback)
+}
+
 /**
  * The public origin that serves `/api/auth`. In this project the Next.js app
  * owns that path and proxies it to this Express server, so the base URL must
  * stay the browser-facing origin (used for OAuth callbacks and cookies).
  */
 export function getAuthBaseUrl(): string {
-  return trimTrailingSlashes(process.env.BETTER_AUTH_URL?.trim() || DEFAULT_AUTH_URL)
+  return resolvePublicOrigin(process.env.BETTER_AUTH_URL, DEFAULT_AUTH_URL)
 }
 
 export function getClientUrl(): string {
-  return trimTrailingSlashes(process.env.CLIENT_URL?.trim() || DEFAULT_CLIENT_URL)
+  return resolvePublicOrigin(process.env.CLIENT_URL, DEFAULT_CLIENT_URL)
 }
 
 export function getTrustedOrigins(): string[] {
-  // Both helpers default to localhost when no origin is configured, so the
-  // development origin stays trusted without hardcoding it in production.
+  // Includes the browser-facing auth and client origins; in development both
+  // resolve to localhost, while production uses the configured Vercel origin.
   return Array.from(new Set([getAuthBaseUrl(), getClientUrl()]))
 }
 
