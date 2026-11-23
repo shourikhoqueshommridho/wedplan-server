@@ -17,7 +17,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "node --import tsx --test src/tests/jwt.test.ts src/tests/admin.test.ts src/tests/image-upload.test.ts src/tests/stripe-subscription.test.ts",
+    "test": "node --import tsx --test src/tests/jwt.test.ts src/tests/admin.test.ts src/tests/image-upload.test.ts src/tests/stripe-subscription.test.ts src/tests/booking-security.test.ts src/tests/service-quota.test.ts",
     "dev": "tsx watch src/server.ts",
     "build": "node ./node_modules/typescript/bin/tsc",
     "start": "node dist/server.js",

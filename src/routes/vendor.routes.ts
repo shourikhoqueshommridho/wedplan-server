@@ -4,7 +4,7 @@ import { ObjectId, type Filter, type WithId } from "mongodb"
 import { getDb } from "../lib/mongodb.js"
 import { requireRole } from "../middleware/auth.js"
 import { requireActiveUser } from "../middleware/blocked.js"
-import { assertCanCreateActiveService } from "../services/subscriptions.service.js"
+import { withQuotaGuard } from "../services/service-quota.service.js"
 import { getVendorProfile, upsertVendorProfile } from "../services/vendors.service.js"
 import type { ServiceRecord } from "../types/service.js"
 import {
@@ -153,47 +153,59 @@ vendorRouter.post("/services", async (req, res, next) => {
   }
 
   try {
-    // Free plan quota is enforced here, not in the browser.
-    const entitlement = await assertCanCreateActiveService(req.auth!.user.id)
-    if (!entitlement.allowed) {
+    const db = await getDb()
+    const collection = db.collection<VendorServiceDocument>("services")
+
+    // The quota check, insert and post-write verification share one per-vendor
+    // lock with admin approvals and reactivations, so concurrent submissions
+    // cannot each see "2 active" and all pass the three-service limit.
+    const result = await withQuotaGuard(
+      req.auth!.user.id,
+      async () => {
+        const profile = await getVendorProfile(req.auth!.user.id)
+        const now = new Date()
+        const document: VendorServiceDocument = {
+          serviceName: parsed.data.serviceName,
+          category: parsed.data.category,
+          description: parsed.data.description,
+          price: parsed.data.price,
+          location: parsed.data.location,
+          images: parsed.data.images,
+          vendorId: req.auth!.user.id,
+          vendorName: profile?.businessName ?? req.auth!.user.name,
+          vendorImage: req.auth!.user.image,
+          status: "pending",
+          isActive: true,
+          createdAt: now,
+          updatedAt: now,
+        }
+        const inserted = await collection.insertOne(document)
+        return toVendorService({ ...document, _id: inserted.insertedId })
+      },
+      async (service) => {
+        // Compensating delete: only the just-created service is removed.
+        await collection.deleteOne(serviceIdFilter(service.id))
+      },
+    )
+
+    if (!result.ok) {
       res.status(403).json({
         success: false,
         message:
           "Free plan allows a maximum of 3 active services. Upgrade to Premium to add more.",
         data: {
-          plan: entitlement.plan,
-          activeServices: entitlement.activeCount,
-          limit: entitlement.limit,
+          plan: result.quota.plan,
+          activeServices: result.quota.activeCount,
+          limit: result.quota.limit,
         },
       })
       return
     }
 
-    const profile = await getVendorProfile(req.auth!.user.id)
-    const now = new Date()
-    const document: VendorServiceDocument = {
-      serviceName: parsed.data.serviceName,
-      category: parsed.data.category,
-      description: parsed.data.description,
-      price: parsed.data.price,
-      location: parsed.data.location,
-      images: parsed.data.images,
-      vendorId: req.auth!.user.id,
-      vendorName: profile?.businessName ?? req.auth!.user.name,
-      vendorImage: req.auth!.user.image,
-      status: "pending",
-      isActive: true,
-      createdAt: now,
-      updatedAt: now,
-    }
-
-    const db = await getDb()
-    const result = await db.collection<VendorServiceDocument>("services").insertOne(document)
-
     res.status(201).json({
       success: true,
       data: {
-        service: toVendorService({ ...document, _id: result.insertedId }),
+        service: result.value,
         message: "Service submitted for approval.",
       },
     })
@@ -253,24 +265,6 @@ vendorRouter.patch("/services/:id", async (req, res, next) => {
     const isInactive = existing.status === "inactive" || !existing.isActive
     const willActivate = isInactive && (contentFieldsChanged || updateData.isActive === true)
 
-    if (willActivate) {
-      // Reactivating a delisted listing consumes a free-plan slot too.
-      const entitlement = await assertCanCreateActiveService(req.auth!.user.id)
-      if (!entitlement.allowed) {
-        res.status(403).json({
-          success: false,
-          message:
-            "Free plan allows a maximum of 3 active services. Upgrade to Premium to reactivate this service.",
-          data: {
-            plan: entitlement.plan,
-            activeServices: entitlement.activeCount,
-            limit: entitlement.limit,
-          },
-        })
-        return
-      }
-    }
-
     if (contentFieldsChanged) {
       // Any content edit must go back through admin review before going public.
       updateSet.status = "pending"
@@ -285,9 +279,48 @@ vendorRouter.patch("/services/:id", async (req, res, next) => {
       updateSet.isActive = false
     }
 
-    const result = await collection.updateOne(filter, { $set: updateSet })
+    const applyUpdate = async (): Promise<boolean> => {
+      const result = await collection.updateOne(filter, { $set: updateSet })
+      return result.matchedCount > 0
+    }
 
-    if (result.matchedCount === 0) {
+    let matched: boolean
+    if (willActivate) {
+      // Reactivation consumes a free-plan slot and shares the lock with
+      // creation and admin approval; the post-check reverts if it loses.
+      const guard = await withQuotaGuard(
+        req.auth!.user.id,
+        applyUpdate,
+        async () => {
+          await collection.updateOne(filter, {
+            $set: {
+              status: existing.status,
+              isActive: existing.isActive,
+              updatedAt: new Date(),
+            },
+          })
+        },
+      )
+
+      if (!guard.ok) {
+        res.status(403).json({
+          success: false,
+          message:
+            "Free plan allows a maximum of 3 active services. Upgrade to Premium to reactivate this service.",
+          data: {
+            plan: guard.quota.plan,
+            activeServices: guard.quota.activeCount,
+            limit: guard.quota.limit,
+          },
+        })
+        return
+      }
+      matched = guard.value
+    } else {
+      matched = await applyUpdate()
+    }
+
+    if (!matched) {
       res.status(404).json({ success: false, message: "Service not found." })
       return
     }

@@ -1,6 +1,7 @@
 import { ObjectId, type Filter } from "mongodb"
 
 import { getDb } from "../lib/mongodb.js"
+import { isWithinServiceLimit, withServiceQuotaLock } from "./service-quota.service.js"
 import { assertCanCreateActiveService } from "./subscriptions.service.js"
 import type { SubscriptionPlan } from "../types/subscription.js"
 
@@ -35,29 +36,11 @@ export type ApprovalResult =
   | { ok: false; reason: "not_found" }
   | { ok: false; reason: "quota"; quota: ApprovalQuota }
 
-/** Serializes approvals per vendor inside this process. */
-const approvalLocks = new Map<string, Promise<void>>()
-
-export async function withApprovalLock<T>(
-  vendorId: string,
-  work: () => Promise<T>,
-): Promise<T> {
-  const previous = approvalLocks.get(vendorId) ?? Promise.resolve()
-  let release!: () => void
-  const gate = new Promise<void>((resolve) => {
-    release = resolve
-  })
-  const tail = previous.then(() => gate)
-  approvalLocks.set(vendorId, tail)
-
-  await previous
-  try {
-    return await work()
-  } finally {
-    release()
-    if (approvalLocks.get(vendorId) === tail) approvalLocks.delete(vendorId)
-  }
-}
+/**
+ * Approvals share the service-quota lock with creation/reactivation so the
+ * three paths cannot race each other. Kept as an alias for existing callers.
+ */
+export const withApprovalLock = withServiceQuotaLock
 
 function serviceIdFilter(id: string): Filter<ApprovableService> {
   return { $or: [{ _id: id }, { _id: new ObjectId(id) }] } as Filter<ApprovableService>
@@ -114,7 +97,7 @@ export async function approveService(
       // Re-check after the write: if a concurrent activation pushed the vendor
       // over the limit, undo this one instead of leaving the quota exceeded.
       const after = await deps.evaluateQuota(existing.vendorId)
-      if (!after.allowed) {
+      if (!isWithinServiceLimit(after)) {
         await deps.updateService(id, {
           status: existing.status,
           isActive: existing.isActive,

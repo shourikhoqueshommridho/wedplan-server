@@ -2,14 +2,9 @@ import { Router } from "express"
 
 import { requireAuth, requireRole } from "../middleware/auth.js"
 import { requireActiveUser } from "../middleware/blocked.js"
-import {
-  findBooking,
-  insertBooking,
-  listBookings,
-  setBookingStatus,
-} from "../services/bookings.service.js"
-import { getPublicServiceById } from "../services/services.service.js"
-import type { BookingRecord, BookingStatus } from "../types/booking.js"
+import { createBookingRequest } from "../services/booking-request.service.js"
+import { findBooking, listBookings, setBookingStatus } from "../services/bookings.service.js"
+import type { BookingStatus } from "../types/booking.js"
 import { createBookingSchema, updateBookingStatusSchema } from "../validators/booking.js"
 import { objectIdSchema } from "../validators/vendor.js"
 
@@ -31,42 +26,40 @@ bookingRouter.post("/", requireRole("customer"), requireActiveUser, async (req, 
   }
 
   try {
-    const service = await getPublicServiceById(parsed.data.serviceId)
+    const result = await createBookingRequest(parsed.data, {
+      id: req.auth!.user.id,
+      name: req.auth!.user.name,
+      email: req.auth!.user.email,
+    })
 
-    if (!service) {
-      res.status(404).json({
+    if (!result.ok) {
+      if (result.reason === "service_not_found") {
+        res.status(404).json({
+          success: false,
+          message: "This service is not available for booking.",
+        })
+        return
+      }
+
+      if (result.reason === "self_booking") {
+        res.status(403).json({
+          success: false,
+          message: "You cannot book your own service.",
+        })
+        return
+      }
+
+      res.status(409).json({
         success: false,
-        message: "This service is not available for booking.",
+        message: "You already have an active booking request for this service on that date.",
       })
       return
     }
 
-    const now = new Date()
-    const record: BookingRecord = {
-      customerId: req.auth!.user.id,
-      customerName: req.auth!.user.name,
-      customerEmail: req.auth!.user.email,
-      vendorId: service.vendor.id,
-      vendorName: service.vendor.name,
-      serviceId: service.id,
-      serviceName: service.name,
-      serviceImage: service.image.src,
-      price: service.price.amount,
-      eventDate: parsed.data.eventDate,
-      eventLocation: parsed.data.eventLocation,
-      message: parsed.data.message,
-      status: "pending",
-      paymentStatus: "not_required",
-      createdAt: now,
-      updatedAt: now,
-    }
-
-    const booking = await insertBooking(record)
-
     res.status(201).json({
       success: true,
       data: {
-        booking,
+        booking: result.booking,
         message: "Booking request sent to the vendor.",
       },
     })
