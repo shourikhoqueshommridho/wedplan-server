@@ -109,6 +109,7 @@ class UniqueBookingStore {
 function depsFor(store: UniqueBookingStore): BookingRequestDeps {
   return {
     findService: async (serviceId) => ({ ...service, id: serviceId }),
+    isVendorBlocked: async () => false,
     insert: (record) => store.insert(record),
   }
 }
@@ -168,6 +169,7 @@ describe("creating a booking request", () => {
     let inserts = 0
     const deps: BookingRequestDeps = {
       findService: async () => service,
+      isVendorBlocked: async () => false,
       insert: async () => {
         inserts += 1
         throw new Error("must not insert")
@@ -189,6 +191,7 @@ describe("creating a booking request", () => {
     let inserts = 0
     const deps: BookingRequestDeps = {
       findService: async () => null,
+      isVendorBlocked: async () => false,
       insert: async () => {
         inserts += 1
         throw new Error("must not insert")
@@ -216,6 +219,7 @@ describe("creating a booking request", () => {
   it("rejects a duplicate legacy record that predates the unique key", async () => {
     const deps: BookingRequestDeps = {
       findService: async () => service,
+      isVendorBlocked: async () => false,
       insert: async () => {
         throw new DuplicateActiveBookingError()
       },

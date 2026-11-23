@@ -1,5 +1,6 @@
-import { ObjectId, type Filter, type UpdateFilter, type WithId } from "mongodb"
+import type { Filter, UpdateFilter, WithId } from "mongodb"
 
+import { idFilter } from "../lib/object-id.js"
 import { getDb } from "../lib/mongodb.js"
 import {
   ACTIVE_BOOKING_STATUSES,
@@ -110,7 +111,7 @@ function toBooking(document: WithId<BookingRecord>): Booking {
 }
 
 export function bookingIdFilter(id: string): Filter<BookingRecord> {
-  return { $or: [{ _id: id }, { _id: new ObjectId(id) }] } as Filter<BookingRecord>
+  return idFilter<BookingRecord>(id)
 }
 
 /** Builds the atomic status update, releasing the reservation when inactive. */

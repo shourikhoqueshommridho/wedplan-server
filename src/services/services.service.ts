@@ -1,12 +1,15 @@
-import { ObjectId, type Filter, type WithId } from "mongodb"
+import { type Filter, type WithId } from "mongodb"
 
+import { idFilter } from "../lib/object-id.js"
 import { getDb } from "../lib/mongodb.js"
+import { escapeRegExp } from "../lib/regex.js"
 import type {
   PublicService,
   PublicServiceList,
   ServiceQuery,
   ServiceRecord,
 } from "../types/service.js"
+import { blockedVendorFilter, listBlockedVendorIds } from "./blocked-vendors.service.js"
 
 const SERVICE_COLLECTION = "services"
 
@@ -32,10 +35,6 @@ const CATEGORY_LABELS_BY_SLUG = {
 const CATEGORY_SLUGS_BY_LABEL = new Map<string, string>(
   Object.entries(CATEGORY_LABELS_BY_SLUG).map(([slug, label]) => [label.toLowerCase(), slug]),
 )
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-}
 
 function exactMatch(value: string): { $regex: string; $options: string } {
   return { $regex: `^${escapeRegExp(value)}$`, $options: "i" }
@@ -179,9 +178,15 @@ function toPublicService(document: WithId<ServiceRecord>): PublicService | null 
   }
 }
 
+/** Public visibility: approved + active, excluding blocked vendors. */
+export function publicServiceFilter(blockedVendorIds: readonly string[]): Filter<ServiceRecord> {
+  return { ...PUBLIC_FILTER, ...blockedVendorFilter(blockedVendorIds) }
+}
+
 export async function listPublicServices(query: ServiceQuery): Promise<PublicServiceList> {
   const collection = (await getDb()).collection<ServiceRecord>(SERVICE_COLLECTION)
-  const filter: Filter<ServiceRecord> = { ...PUBLIC_FILTER }
+  const visibilityFilter = publicServiceFilter(await listBlockedVendorIds())
+  const filter: Filter<ServiceRecord> = { ...visibilityFilter }
 
   if (query.search) {
     filter.serviceName = containsMatch(query.search)
@@ -202,7 +207,7 @@ export async function listPublicServices(query: ServiceQuery): Promise<PublicSer
       .find(filter)
       .sort({ price: sortDirection, _id: 1 })
       .toArray(),
-    collection.distinct("location", PUBLIC_FILTER),
+    collection.distinct("location", visibilityFilter),
   ])
 
   const services = documents
@@ -232,11 +237,8 @@ function containsMatch(value: string): { $regex: string; $options: string } {
  */
 export async function getPublicServiceById(id: string): Promise<PublicService | null> {
   const collection = (await getDb()).collection<ServiceRecord>(SERVICE_COLLECTION)
-  const objectId = new ObjectId(id)
-
   const filter: Filter<ServiceRecord> = {
-    ...PUBLIC_FILTER,
-    $or: [{ _id: id }, { _id: objectId }],
+    $and: [publicServiceFilter(await listBlockedVendorIds()), idFilter<ServiceRecord>(id)],
   }
 
   const document = await collection.findOne(filter)

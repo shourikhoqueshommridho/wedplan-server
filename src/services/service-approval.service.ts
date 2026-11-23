@@ -1,5 +1,6 @@
-import { ObjectId, type Filter } from "mongodb"
+import type { Filter } from "mongodb"
 
+import { idFilter } from "../lib/object-id.js"
 import { getDb } from "../lib/mongodb.js"
 import { isWithinServiceLimit, withServiceQuotaLock } from "./service-quota.service.js"
 import { assertCanCreateActiveService } from "./subscriptions.service.js"
@@ -43,7 +44,7 @@ export type ApprovalResult =
 export const withApprovalLock = withServiceQuotaLock
 
 function serviceIdFilter(id: string): Filter<ApprovableService> {
-  return { $or: [{ _id: id }, { _id: new ObjectId(id) }] } as Filter<ApprovableService>
+  return idFilter<ApprovableService>(id)
 }
 
 const defaultDeps: ApprovalDeps = {

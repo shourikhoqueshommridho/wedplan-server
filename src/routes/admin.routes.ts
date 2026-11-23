@@ -1,7 +1,8 @@
 import { Router } from "express"
-import { ObjectId, type Filter, type WithId } from "mongodb"
+import type { Filter, WithId } from "mongodb"
 import { z } from "zod"
 
+import { idFilter } from "../lib/object-id.js"
 import { getDb } from "../lib/mongodb.js"
 import { requireRole } from "../middleware/auth.js"
 import { requireActiveUser } from "../middleware/blocked.js"
@@ -42,7 +43,7 @@ function toIsoString(value: unknown): string | null {
 }
 
 function serviceIdFilter(id: string): Filter<AdminServiceDocument> {
-  return { $or: [{ _id: id }, { _id: new ObjectId(id) }] } as Filter<AdminServiceDocument>
+  return idFilter<AdminServiceDocument>(id)
 }
 
 function toAdminService(document: WithId<AdminServiceDocument>) {

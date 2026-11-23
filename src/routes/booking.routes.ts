@@ -3,6 +3,7 @@ import { Router } from "express"
 import { requireAuth, requireRole } from "../middleware/auth.js"
 import { requireActiveUser } from "../middleware/blocked.js"
 import { createBookingRequest } from "../services/booking-request.service.js"
+import { evaluateBookingTransition } from "../services/booking-transitions.js"
 import { findBooking, listBookings, setBookingStatus } from "../services/bookings.service.js"
 import type { BookingStatus } from "../types/booking.js"
 import { createBookingSchema, updateBookingStatusSchema } from "../validators/booking.js"
@@ -45,6 +46,14 @@ bookingRouter.post("/", requireRole("customer"), requireActiveUser, async (req, 
         res.status(403).json({
           success: false,
           message: "You cannot book your own service.",
+        })
+        return
+      }
+
+      if (result.reason === "vendor_blocked") {
+        res.status(403).json({
+          success: false,
+          message: "This service is not available for booking.",
         })
         return
       }
@@ -111,58 +120,16 @@ bookingRouter.patch("/:id/status", requireAuth, requireActiveUser, async (req, r
       return
     }
 
-    const role = req.auth!.user.role
-    const userId = req.auth!.user.id
     const nextStatus: BookingStatus = parsedBody.data.status
+    const decision = evaluateBookingTransition(
+      { customerId: booking.customerId, vendorId: booking.vendorId, status: booking.status },
+      { role: req.auth!.user.role, id: req.auth!.user.id },
+      nextStatus,
+    )
 
-    if (role === "customer") {
-      if (booking.customerId !== userId || nextStatus !== "cancelled") {
-        res.status(403).json({
-          success: false,
-          message: "You can only cancel your own booking request.",
-        })
-        return
-      }
-
-      if (booking.status !== "pending" && booking.status !== "accepted") {
-        res.status(409).json({
-          success: false,
-          message: "This booking can no longer be cancelled.",
-        })
-        return
-      }
-    } else if (role === "vendor") {
-      if (booking.vendorId !== userId) {
-        res.status(403).json({
-          success: false,
-          message: "You can only manage bookings for your own services.",
-        })
-        return
-      }
-
-      if (!["accepted", "declined", "completed"].includes(nextStatus)) {
-        res.status(403).json({
-          success: false,
-          message: "Vendors can accept, decline or complete booking requests.",
-        })
-        return
-      }
-
-      const allowedTransitions: Record<BookingStatus, BookingStatus[]> = {
-        pending: ["accepted", "declined"],
-        accepted: ["completed"],
-        declined: [],
-        cancelled: [],
-        completed: [],
-      }
-
-      if (!allowedTransitions[booking.status].includes(nextStatus)) {
-        res.status(409).json({
-          success: false,
-          message: "This booking cannot move to that status.",
-        })
-        return
-      }
+    if (!decision.allowed) {
+      res.status(decision.status).json({ success: false, message: decision.message })
+      return
     }
 
     const updated = await setBookingStatus(parsedId.data, nextStatus)

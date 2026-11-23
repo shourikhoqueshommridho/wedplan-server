@@ -1,5 +1,6 @@
-import { ObjectId, type Document, type Filter } from "mongodb"
+import { ObjectId, type Filter } from "mongodb"
 
+import { idFilter } from "../lib/object-id.js"
 import { getDb } from "../lib/mongodb.js"
 import type { PaymentTransactionRecord, SubscriptionPlan } from "../types/subscription.js"
 
@@ -42,10 +43,6 @@ export interface AdminVendorIdentity {
 export interface AdminTransactionDeps {
   findTransactions(limit: number): Promise<PaymentTransactionRecord[]>
   findVendors(vendorIds: string[]): Promise<AdminVendorIdentity[]>
-}
-
-function idFilter(id: string): Filter<Document> {
-  return { $or: [{ _id: id }, { _id: new ObjectId(id) }] } as Filter<Document>
 }
 
 const userDeps: AdminUserDeps = {

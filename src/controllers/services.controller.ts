@@ -1,6 +1,7 @@
 import type { NextFunction, Request, Response } from "express"
 
 import { getPublicServiceById, listPublicServices } from "../services/services.service.js"
+import type { PublicService } from "../types/service.js"
 import { serviceIdSchema, serviceQuerySchema } from "../validators/service-query.js"
 
 /**
@@ -47,37 +48,48 @@ export async function getServices(
  * Public detail endpoint. Invalid IDs return 400, while unknown or
  * non-public services return 404.
  */
-export async function getServiceById(
-  req: Request,
-  res: Response,
-  next: NextFunction,
-): Promise<void> {
-  const parsedId = serviceIdSchema.safeParse(req.params.id)
+export interface ServiceDetailDeps {
+  findService(id: string): Promise<PublicService | null>
+}
 
-  if (!parsedId.success) {
-    res.status(400).json({
-      success: false,
-      message: "Invalid service ID.",
-    })
-    return
-  }
+const defaultDetailDeps: ServiceDetailDeps = { findService: getPublicServiceById }
 
-  try {
-    const service = await getPublicServiceById(parsedId.data)
+/** Factory keeps the 400/404 contract testable without a database. */
+export function makeGetServiceById(deps: ServiceDetailDeps = defaultDetailDeps) {
+  return async function getServiceById(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+  ): Promise<void> {
+    const parsedId = serviceIdSchema.safeParse(req.params.id)
 
-    if (!service) {
-      res.status(404).json({
+    if (!parsedId.success) {
+      res.status(400).json({
         success: false,
-        message: "Service not found.",
+        message: "Invalid service ID.",
       })
       return
     }
 
-    res.status(200).json({
-      success: true,
-      data: service,
-    })
-  } catch (error) {
-    next(error)
+    try {
+      const service = await deps.findService(parsedId.data)
+
+      if (!service) {
+        res.status(404).json({
+          success: false,
+          message: "Service not found.",
+        })
+        return
+      }
+
+      res.status(200).json({
+        success: true,
+        data: service,
+      })
+    } catch (error) {
+      next(error)
+    }
   }
 }
+
+export const getServiceById = makeGetServiceById()

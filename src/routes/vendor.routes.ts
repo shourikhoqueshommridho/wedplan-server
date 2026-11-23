@@ -1,7 +1,9 @@
 import { Router } from "express"
-import { ObjectId, type Filter, type WithId } from "mongodb"
+import type { Filter, WithId } from "mongodb"
 
+import { idFilter } from "../lib/object-id.js"
 import { getDb } from "../lib/mongodb.js"
+import { escapeRegExp } from "../lib/regex.js"
 import { requireRole } from "../middleware/auth.js"
 import { requireActiveUser } from "../middleware/blocked.js"
 import { withQuotaGuard } from "../services/service-quota.service.js"
@@ -38,7 +40,7 @@ function toIsoString(value: unknown): string | null {
 }
 
 function serviceIdFilter(id: string): Filter<VendorServiceDocument> {
-  return { $or: [{ _id: id }, { _id: new ObjectId(id) }] } as Filter<VendorServiceDocument>
+  return idFilter<VendorServiceDocument>(id)
 }
 
 function toVendorService(document: WithId<VendorServiceDocument>) {
@@ -113,7 +115,7 @@ vendorRouter.get("/services", async (req, res, next) => {
     const filter: Filter<VendorServiceDocument> = { vendorId: req.auth!.user.id }
 
     if (query.data.search) {
-      filter.serviceName = { $regex: query.data.search, $options: "i" }
+      filter.serviceName = { $regex: escapeRegExp(query.data.search), $options: "i" }
     }
     if (query.data.category) {
       filter.category = query.data.category

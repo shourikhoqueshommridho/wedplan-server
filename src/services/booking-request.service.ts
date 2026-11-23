@@ -1,5 +1,6 @@
 import type { Booking, BookingRecord } from "../types/booking.js"
 import type { CreateBookingInput } from "../validators/booking.js"
+import { isVendorBlocked } from "./blocked-vendors.service.js"
 import {
   DuplicateActiveBookingError,
   insertBooking,
@@ -25,6 +26,7 @@ export interface BookingCustomer {
 /** Injected so the booking rules can be tested without MongoDB. */
 export interface BookingRequestDeps {
   findService(serviceId: string): Promise<BookableService | null>
+  isVendorBlocked(vendorId: string): Promise<boolean>
   insert(record: BookingRecord): Promise<Booking>
 }
 
@@ -32,10 +34,12 @@ export type CreateBookingRequestResult =
   | { ok: true; booking: Booking }
   | { ok: false; reason: "service_not_found" }
   | { ok: false; reason: "self_booking" }
+  | { ok: false; reason: "vendor_blocked" }
   | { ok: false; reason: "duplicate" }
 
 const defaultDeps: BookingRequestDeps = {
   findService: getPublicServiceById,
+  isVendorBlocked,
   insert: insertBooking,
 }
 
@@ -85,6 +89,7 @@ export async function createBookingRequest(
   const service = await deps.findService(input.serviceId)
   if (!service) return { ok: false, reason: "service_not_found" }
   if (isSelfBooking(customer.id, service.vendor.id)) return { ok: false, reason: "self_booking" }
+  if (await deps.isVendorBlocked(service.vendor.id)) return { ok: false, reason: "vendor_blocked" }
 
   const record = buildBookingRecord(input, customer, service, now)
 
