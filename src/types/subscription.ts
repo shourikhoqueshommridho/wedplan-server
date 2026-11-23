@@ -31,6 +31,9 @@ export interface SubscriptionRecord {
   stripeCustomerId?: string | null
   stripeSessionId?: string | null
   stripeSubscriptionId?: string | null
+  /** Short-lived atomic reservation used while a Checkout Session is created. */
+  checkoutRequestId?: string
+  checkoutReservationExpiresAt?: Date
   currentPeriodEnd?: Date | string | null
   cancelAtPeriodEnd?: boolean
   updatedAt: Date | string
@@ -48,6 +51,11 @@ export interface PaymentTransactionRecord {
   stripeSubscriptionId: string | null
   status: string
   stripeEventId: string | null
+  /** Stripe invoice/payment intent ids for reconciliation. Absent on old rows. */
+  stripeInvoiceId?: string | null
+  stripePaymentIntentId?: string | null
+  /** Unique per logical payment; blocks different events for one invoice. */
+  dedupeKey?: string
   createdAt: Date | string
 }
 
@@ -76,5 +84,8 @@ export interface SubscriptionSnapshotInput {
     stripeSessionId: string | null
     stripeSubscriptionId: string | null
     status: string
+    dedupeKey?: string
+    stripeInvoiceId?: string | null
+    stripePaymentIntentId?: string | null
   } | null
 }

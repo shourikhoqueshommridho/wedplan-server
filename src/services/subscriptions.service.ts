@@ -16,6 +16,14 @@ const SUBSCRIPTION_COLLECTION = "subscriptions"
 const TRANSACTION_COLLECTION = "transactions"
 const EVENT_COLLECTION = "stripe_events"
 
+/** One paid/failed row per logical payment, even across different events. */
+export const TRANSACTION_DEDUPE_INDEX = {
+  key: { dedupeKey: 1 },
+  name: "transaction_dedupe_unique",
+  unique: true,
+  sparse: true,
+} as const
+
 let indexPromise: Promise<void> | null = null
 
 /** Zero-decimal currencies must not be divided by 100. */
@@ -147,13 +155,17 @@ function subscriptionId(subscription: Stripe.Subscription): string | null {
   return subscription.id || null
 }
 
-async function ensureIndexes(): Promise<void> {
+export async function ensureIndexes(): Promise<void> {
   indexPromise ??= (async () => {
     const db = await getDb()
     await Promise.all([
       db.collection<SubscriptionRecord>(SUBSCRIPTION_COLLECTION).createIndex(
         { vendorId: 1 },
         { unique: true, name: "subscription_vendor_unique" },
+      ),
+      db.collection<SubscriptionRecord>(SUBSCRIPTION_COLLECTION).createIndex(
+        { checkoutRequestId: 1 },
+        { unique: true, sparse: true, name: "subscription_checkout_request_unique" },
       ),
       db.collection<PaymentTransactionRecord>(TRANSACTION_COLLECTION).createIndex(
         { stripeEventId: 1 },
@@ -162,6 +174,14 @@ async function ensureIndexes(): Promise<void> {
       db.collection<PaymentTransactionRecord>(TRANSACTION_COLLECTION).createIndex(
         { vendorId: 1, createdAt: -1 },
         { name: "transaction_vendor_recent" },
+      ),
+      db.collection<PaymentTransactionRecord>(TRANSACTION_COLLECTION).createIndex(
+        { ...TRANSACTION_DEDUPE_INDEX.key },
+        {
+          name: TRANSACTION_DEDUPE_INDEX.name,
+          unique: TRANSACTION_DEDUPE_INDEX.unique,
+          sparse: TRANSACTION_DEDUPE_INDEX.sparse,
+        },
       ),
     ])
   })().catch((error: unknown) => {
@@ -369,6 +389,9 @@ export async function commitSubscriptionSnapshot(
             stripeSubscriptionId: input.payment.stripeSubscriptionId,
             status: input.payment.status,
             stripeEventId: input.eventId,
+            stripeInvoiceId: input.payment.stripeInvoiceId ?? null,
+            stripePaymentIntentId: input.payment.stripePaymentIntentId ?? null,
+            dedupeKey: input.payment.dedupeKey ?? `event:${input.eventId}`,
             createdAt: now,
           },
           { session },

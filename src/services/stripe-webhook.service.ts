@@ -44,6 +44,31 @@ function invoiceSubscriptionId(invoice: Stripe.Invoice): string | null {
   return referenceId(raw.subscription) ?? referenceId(raw.parent?.subscription_details?.subscription)
 }
 
+/** Stripe invoices and subscriptions expose these ids as strings or objects. */
+/**
+ * Stable per-payment key. Different event types for the same invoice collapse
+ * to one key, while each genuine renewal invoice gets its own key.
+ */
+export function paymentDedupeKey(input: {
+  invoiceId?: string | null
+  sessionId?: string | null
+  status: string
+}): string {
+  return input.invoiceId
+    ? `invoice:${input.invoiceId}:${input.status}`
+    : `checkout_session:${input.sessionId ?? "unknown"}:${input.status}`
+}
+
+function invoicePaymentIntentId(invoice: Stripe.Invoice): string | null {
+  const raw = invoice as unknown as { payment_intent?: unknown }
+  return referenceId(raw.payment_intent)
+}
+
+function subscriptionInvoiceId(subscription: Stripe.Subscription): string | null {
+  const raw = subscription as unknown as { latest_invoice?: unknown }
+  return referenceId(raw.latest_invoice)
+}
+
 function metadataVendorId(value: unknown): string | null {
   if (!value || typeof value !== "object") return null
   const metadata = (value as { metadata?: Record<string, unknown> }).metadata
@@ -125,6 +150,8 @@ export async function processStripeEvent(
 
       const status: SubscriptionStatus = mapStripeSubscriptionStatus(subscription.status)
       const amount = toMajorAmount(session.amount_total ?? session.amount_subtotal, session.currency)
+      const paymentStatus = entitled(subscription.status) ? "paid" : subscription.status
+      const invoiceId = subscriptionInvoiceId(subscription)
 
       const result = await context.commit({
         eventId: event.id,
@@ -142,7 +169,16 @@ export async function processStripeEvent(
           currency: (session.currency || "usd").toUpperCase(),
           stripeSessionId: session.id,
           stripeSubscriptionId,
-          status: entitled(subscription.status) ? "paid" : subscription.status,
+          status: paymentStatus,
+          // invoice.paid describes the same initial payment. Sharing this key
+          // prevents two paid rows for one invoice from different events.
+          dedupeKey: paymentDedupeKey({
+            invoiceId,
+            sessionId: session.id,
+            status: paymentStatus,
+          }),
+          stripeInvoiceId: invoiceId,
+          stripePaymentIntentId: referenceId(session.payment_intent),
         },
       })
 
@@ -174,6 +210,8 @@ export async function processStripeEvent(
           stripeSessionId: session.id,
           stripeSubscriptionId,
           status: "failed",
+          dedupeKey: paymentDedupeKey({ sessionId: session.id, status: "failed" }),
+          stripePaymentIntentId: referenceId(session.payment_intent),
         },
       })
 
@@ -271,6 +309,9 @@ export async function processStripeEvent(
           stripeSessionId: null,
           stripeSubscriptionId,
           status: "paid",
+          dedupeKey: paymentDedupeKey({ invoiceId: invoice.id, status: "paid" }),
+          stripeInvoiceId: invoice.id,
+          stripePaymentIntentId: invoicePaymentIntentId(invoice),
         },
       })
 
@@ -312,6 +353,9 @@ export async function processStripeEvent(
           stripeSessionId: null,
           stripeSubscriptionId,
           status: "failed",
+          dedupeKey: paymentDedupeKey({ invoiceId: invoice.id, status: "failed" }),
+          stripeInvoiceId: invoice.id,
+          stripePaymentIntentId: invoicePaymentIntentId(invoice),
         },
       })
 
