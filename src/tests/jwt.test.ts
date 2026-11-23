@@ -63,7 +63,9 @@ async function signToken(options: SignOptions = {}): Promise<string> {
 function tamper(token: string): string {
   const parts = token.split(".")
   const signature = parts[2]!
-  parts[2] = signature.slice(0, -1) + (signature.endsWith("A") ? "B" : "A")
+  // The first base64url character carries six significant bits, so changing it
+  // always changes the signature bytes (the trailing character may not).
+  parts[2] = (signature.startsWith("A") ? "B" : "A") + signature.slice(1)
   return parts.join(".")
 }
 

@@ -27,6 +27,8 @@ export interface ServiceRecord {
   vendorImage?: string | null
   status: string
   isActive: boolean
+  /** Free-plan slot reservation (1..3). Absent for premium/inactive listings. */
+  quotaSlot?: number
   createdAt?: Date | string
 }
 

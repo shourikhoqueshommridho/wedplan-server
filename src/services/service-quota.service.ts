@@ -1,4 +1,8 @@
 import type { SubscriptionPlan } from "../types/subscription.js"
+import {
+  isQuotaDuplicateKeyError,
+  prepareServiceSlot,
+} from "./service-quota-db.service.js"
 import { assertCanCreateActiveService } from "./subscriptions.service.js"
 
 export interface ServiceQuota {
@@ -9,9 +13,9 @@ export interface ServiceQuota {
 }
 
 /**
- * Serializes every quota-sensitive service change (create, reactivate, admin
- * approval) for the same vendor. One shared lock is essential: separate locks
- * per endpoint would still let a create race an approval.
+ * Process-local lock retained as a fast path to reduce contention. Safety no
+ * longer depends on it: the unique `quotaSlot` index is enforced by MongoDB
+ * across every backend instance.
  */
 const quotaLocks = new Map<string, Promise<void>>()
 
@@ -36,10 +40,17 @@ export async function withServiceQuotaLock<T>(
   }
 }
 
-/** Injected so the quota race can be tested without MongoDB. */
+export interface QuotaContext {
+  /** Free-plan slot to write with the activation; `null` for unlimited plans. */
+  slot: number | null
+}
+
+/** Injected so quota behavior can be tested without MongoDB. */
 export interface QuotaGuardDeps {
   evaluateQuota(vendorId: string): Promise<ServiceQuota>
   withLock<T>(vendorId: string, work: () => Promise<T>): Promise<T>
+  prepare?(vendorId: string): Promise<{ slot: number | null } | null>
+  isDuplicateReservationError?(error: unknown): boolean
 }
 
 /**
@@ -58,16 +69,19 @@ export type QuotaGuardResult<T> =
 const defaultDeps: QuotaGuardDeps = {
   evaluateQuota: assertCanCreateActiveService,
   withLock: withServiceQuotaLock,
+  prepare: prepareServiceSlot,
+  isDuplicateReservationError: isQuotaDuplicateKeyError,
 }
 
 /**
- * Runs an activation under the vendor lock, checking the quota before and
- * after the write. The second check plus rollback closes the stale-read window
- * that previously allowed concurrent calls to create a fourth active service.
+ * Runs an activation with a database-level slot reservation. The candidate slot
+ * is computed from real active services (including legacy records) and written
+ * atomically by `work`; a unique index rejects competing reservations, and the
+ * bounded retry re-reads state before trying another slot.
  */
 export async function withQuotaGuard<T>(
   vendorId: string,
-  work: () => Promise<T>,
+  work: (context: QuotaContext) => Promise<T>,
   rollback: (value: T) => Promise<void>,
   deps: QuotaGuardDeps = defaultDeps,
 ): Promise<QuotaGuardResult<T>> {
@@ -75,7 +89,27 @@ export async function withQuotaGuard<T>(
     const before = await deps.evaluateQuota(vendorId)
     if (!before.allowed) return { ok: false, reason: "quota", quota: before }
 
-    const value = await work()
+    let value!: T
+
+    if (!deps.prepare || !deps.isDuplicateReservationError) {
+      value = await work({ slot: null })
+    } else {
+      for (let attempt = 0; ; attempt += 1) {
+        const reservation = await deps.prepare(vendorId)
+        if (!reservation) {
+          const quota = await deps.evaluateQuota(vendorId)
+          return { ok: false, reason: "quota", quota }
+        }
+
+        try {
+          value = await work({ slot: reservation.slot })
+          break
+        } catch (error) {
+          if (attempt >= 3 || !deps.isDuplicateReservationError(error)) throw error
+          // Another instance claimed the slot; re-read and try a different one.
+        }
+      }
+    }
 
     const after = await deps.evaluateQuota(vendorId)
     if (!isWithinServiceLimit(after)) {

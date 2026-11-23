@@ -6,7 +6,8 @@ import { getDb } from "../lib/mongodb.js"
 import { escapeRegExp } from "../lib/regex.js"
 import { requireRole } from "../middleware/auth.js"
 import { requireActiveUser } from "../middleware/blocked.js"
-import { withQuotaGuard } from "../services/service-quota.service.js"
+import { SLOT_UNSET } from "../services/service-quota-db.service.js"
+import { withQuotaGuard, type QuotaContext } from "../services/service-quota.service.js"
 import { getVendorProfile, upsertVendorProfile } from "../services/vendors.service.js"
 import type { ServiceRecord } from "../types/service.js"
 import {
@@ -163,7 +164,7 @@ vendorRouter.post("/services", async (req, res, next) => {
     // cannot each see "2 active" and all pass the three-service limit.
     const result = await withQuotaGuard(
       req.auth!.user.id,
-      async () => {
+      async (context) => {
         const profile = await getVendorProfile(req.auth!.user.id)
         const now = new Date()
         const document: VendorServiceDocument = {
@@ -178,6 +179,7 @@ vendorRouter.post("/services", async (req, res, next) => {
           vendorImage: req.auth!.user.image,
           status: "pending",
           isActive: true,
+          ...(context.slot === null ? {} : { quotaSlot: context.slot }),
           createdAt: now,
           updatedAt: now,
         }
@@ -281,15 +283,20 @@ vendorRouter.patch("/services/:id", async (req, res, next) => {
       updateSet.isActive = false
     }
 
-    const applyUpdate = async (): Promise<boolean> => {
-      const result = await collection.updateOne(filter, { $set: updateSet })
+    const applyUpdate = async ({ slot }: QuotaContext): Promise<boolean> => {
+      const set: Record<string, unknown> = { ...updateSet }
+      if (willActivate && slot !== null) set.quotaSlot = slot
+      const update: Record<string, unknown> = { $set: set }
+      if (updateData.isActive === false) update.$unset = SLOT_UNSET
+
+      const result = await collection.updateOne(filter, update)
       return result.matchedCount > 0
     }
 
     let matched: boolean
     if (willActivate) {
-      // Reactivation consumes a free-plan slot and shares the lock with
-      // creation and admin approval; the post-check reverts if it loses.
+      // The slot is written atomically with the activation; a unique index
+      // rejects a slot another backend instance already claimed.
       const guard = await withQuotaGuard(
         req.auth!.user.id,
         applyUpdate,
@@ -300,6 +307,7 @@ vendorRouter.patch("/services/:id", async (req, res, next) => {
               isActive: existing.isActive,
               updatedAt: new Date(),
             },
+            $unset: SLOT_UNSET,
           })
         },
       )
@@ -319,7 +327,7 @@ vendorRouter.patch("/services/:id", async (req, res, next) => {
       }
       matched = guard.value
     } else {
-      matched = await applyUpdate()
+      matched = await applyUpdate({ slot: null })
     }
 
     if (!matched) {
@@ -363,6 +371,7 @@ vendorRouter.delete("/services/:id", async (req, res, next) => {
           status: "inactive",
           updatedAt: new Date(),
         },
+        $unset: SLOT_UNSET,
       },
     )
 
