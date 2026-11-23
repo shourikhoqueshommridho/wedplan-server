@@ -3,6 +3,7 @@ import { ObjectId, type Filter, type WithId } from "mongodb"
 
 import { getDb } from "../lib/mongodb.js"
 import { requireRole } from "../middleware/auth.js"
+import { requireActiveUser } from "../middleware/blocked.js"
 import { assertCanCreateActiveService } from "../services/subscriptions.service.js"
 import { getVendorProfile, upsertVendorProfile } from "../services/vendors.service.js"
 import type { ServiceRecord } from "../types/service.js"
@@ -17,6 +18,7 @@ import { serviceQuerySchema } from "../validators/service-query.js"
 const vendorRouter = Router()
 
 vendorRouter.use(requireRole("vendor"))
+vendorRouter.use(requireActiveUser)
 
 interface VendorServiceDocument extends ServiceRecord {
   updatedAt?: Date | string

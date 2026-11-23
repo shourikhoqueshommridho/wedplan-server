@@ -4,6 +4,12 @@ import { z } from "zod"
 
 import { getDb } from "../lib/mongodb.js"
 import { requireRole } from "../middleware/auth.js"
+import { requireActiveUser } from "../middleware/blocked.js"
+import {
+  deleteAdminService,
+  listAdminTransactions,
+  setUserBlocked,
+} from "../services/admin.service.js"
 import { listBookings } from "../services/bookings.service.js"
 import { approveService } from "../services/service-approval.service.js"
 import { listVendorProfiles } from "../services/vendors.service.js"
@@ -14,6 +20,7 @@ import { objectIdSchema } from "../validators/vendor.js"
 const adminRouter = Router()
 
 adminRouter.use(requireRole("admin"))
+adminRouter.use(requireActiveUser)
 
 const approvalSchema = z.object({
   status: z.enum(["approved", "rejected"], {
@@ -71,6 +78,8 @@ adminRouter.get("/users", async (_req, res, next) => {
             image: 1,
             role: 1,
             createdAt: 1,
+            blocked: 1,
+            blockedAt: 1,
           },
         },
       )
@@ -85,6 +94,8 @@ adminRouter.get("/users", async (_req, res, next) => {
       image: typeof document.image === "string" ? document.image : null,
       role: normalizeUserRole(document.role),
       createdAt: toIsoString(document.createdAt),
+      blocked: document.blocked === true,
+      blockedAt: toIsoString(document.blockedAt),
     }))
 
     res.status(200).json({ success: true, data: { users } })
@@ -162,6 +173,98 @@ adminRouter.patch("/services/:id/approval", async (req, res, next) => {
       success: true,
       data: { message: `Service ${parsedBody.data.status}.` },
     })
+  } catch (error) {
+    next(error)
+  }
+})
+
+adminRouter.patch("/users/:id/block", async (req, res, next) => {
+  const parsedId = z.string().min(1).safeParse(req.params.id)
+  const parsedBody = z
+    .object({ reason: z.string().trim().max(300).optional() })
+    .safeParse(req.body ?? {})
+
+  if (!parsedId.success) {
+    res.status(400).json({ success: false, message: "Invalid user ID." })
+    return
+  }
+  if (!parsedBody.success) {
+    res.status(400).json({ success: false, message: "A valid reason is required." })
+    return
+  }
+
+  try {
+    const result = await setUserBlocked(
+      parsedId.data,
+      true,
+      req.auth!.user.id,
+      parsedBody.data.reason ?? null,
+    )
+
+    if (!result.ok) {
+      const status = result.reason === "self" ? 400 : 404
+      res.status(status).json({
+        success: false,
+        message:
+          result.reason === "self"
+            ? "You cannot block your own account."
+            : "User not found.",
+      })
+      return
+    }
+
+    res.status(200).json({ success: true, data: { message: "User blocked." } })
+  } catch (error) {
+    next(error)
+  }
+})
+
+adminRouter.patch("/users/:id/unblock", async (req, res, next) => {
+  const parsedId = z.string().min(1).safeParse(req.params.id)
+
+  if (!parsedId.success) {
+    res.status(400).json({ success: false, message: "Invalid user ID." })
+    return
+  }
+
+  try {
+    const result = await setUserBlocked(parsedId.data, false, req.auth!.user.id, null)
+    if (!result.ok) {
+      res.status(404).json({ success: false, message: "User not found." })
+      return
+    }
+
+    res.status(200).json({ success: true, data: { message: "User unblocked." } })
+  } catch (error) {
+    next(error)
+  }
+})
+
+adminRouter.get("/transactions", async (_req, res, next) => {
+  try {
+    const transactions = await listAdminTransactions(100)
+    res.status(200).json({ success: true, data: { transactions } })
+  } catch (error) {
+    next(error)
+  }
+})
+
+adminRouter.delete("/services/:id", async (req, res, next) => {
+  const parsedId = objectIdSchema.safeParse(req.params.id)
+
+  if (!parsedId.success) {
+    res.status(400).json({ success: false, message: "Invalid service ID." })
+    return
+  }
+
+  try {
+    const result = await deleteAdminService(parsedId.data)
+    if (!result.ok) {
+      res.status(404).json({ success: false, message: "Service not found." })
+      return
+    }
+
+    res.status(200).json({ success: true, data: { message: "Service deleted." } })
   } catch (error) {
     next(error)
   }

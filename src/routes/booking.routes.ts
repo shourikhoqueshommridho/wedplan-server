@@ -1,6 +1,7 @@
 import { Router } from "express"
 
 import { requireAuth, requireRole } from "../middleware/auth.js"
+import { requireActiveUser } from "../middleware/blocked.js"
 import {
   findBooking,
   insertBooking,
@@ -14,7 +15,7 @@ import { objectIdSchema } from "../validators/vendor.js"
 
 const bookingRouter = Router()
 
-bookingRouter.post("/", requireRole("customer"), async (req, res, next) => {
+bookingRouter.post("/", requireRole("customer"), requireActiveUser, async (req, res, next) => {
   const parsed = createBookingSchema.safeParse(req.body)
 
   if (!parsed.success) {
@@ -74,7 +75,7 @@ bookingRouter.post("/", requireRole("customer"), async (req, res, next) => {
   }
 })
 
-bookingRouter.get("/", requireAuth, async (req, res, next) => {
+bookingRouter.get("/", requireAuth, requireActiveUser, async (req, res, next) => {
   try {
     const role = req.auth!.user.role
     const userId = req.auth!.user.id
@@ -92,7 +93,7 @@ bookingRouter.get("/", requireAuth, async (req, res, next) => {
   }
 })
 
-bookingRouter.patch("/:id/status", requireAuth, async (req, res, next) => {
+bookingRouter.patch("/:id/status", requireAuth, requireActiveUser, async (req, res, next) => {
   const parsedId = objectIdSchema.safeParse(req.params.id)
   const parsedBody = updateBookingStatusSchema.safeParse(req.body)
 

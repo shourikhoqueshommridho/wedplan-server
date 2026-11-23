@@ -11,6 +11,7 @@ import {
   vendorIntentCookieOptions,
 } from "../lib/vendor-intent.js"
 import { requireAuth, requireRole } from "../middleware/auth.js"
+import { requireActiveUser } from "../middleware/blocked.js"
 import { upsertVendorProfile } from "../services/vendors.service.js"
 import { normalizeUserRole } from "../types/auth.js"
 import {
@@ -229,14 +230,14 @@ accountRouter.delete("/vendor/intent", (_req, res) => {
   res.status(200).json({ success: true })
 })
 
-accountRouter.get("/me", requireAuth, (req, res) => {
+accountRouter.get("/me", requireAuth, requireActiveUser, (req, res) => {
   res.status(200).json({
     success: true,
     data: req.auth,
   })
 })
 
-accountRouter.get("/admin/users", requireRole("admin"), async (_req, res) => {
+accountRouter.get("/admin/users", requireRole("admin"), requireActiveUser, async (_req, res) => {
   const db = await getDb()
   const documents = await db
     .collection("users")
@@ -250,6 +251,8 @@ accountRouter.get("/admin/users", requireRole("admin"), async (_req, res) => {
           image: 1,
           role: 1,
           createdAt: 1,
+          blocked: 1,
+          blockedAt: 1,
         },
       },
     )
@@ -263,6 +266,13 @@ accountRouter.get("/admin/users", requireRole("admin"), async (_req, res) => {
     email: typeof document.email === "string" ? document.email : "",
     image: typeof document.image === "string" ? document.image : null,
     role: normalizeUserRole(document.role),
+    blocked: document.blocked === true,
+    blockedAt:
+      document.blockedAt instanceof Date
+        ? document.blockedAt.toISOString()
+        : typeof document.blockedAt === "string"
+          ? document.blockedAt
+          : null,
     createdAt:
       document.createdAt instanceof Date
         ? document.createdAt.toISOString()
