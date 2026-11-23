@@ -1,5 +1,6 @@
 import { betterAuth } from "better-auth"
 import { mongodbAdapter } from "better-auth/adapters/mongodb"
+import { jwt } from "better-auth/plugins"
 import { toNodeHandler } from "better-auth/node"
 
 import { getDb } from "./mongodb.js"
@@ -9,13 +10,24 @@ import type { UserRole } from "../types/auth.js"
 
 const DEFAULT_AUTH_URL = "http://localhost:3000"
 const DEFAULT_CLIENT_URL = "http://localhost:3000"
+const LOCAL_CLIENT_ORIGIN = "http://localhost:3000"
+/** Exact frontend production origin; preview deployments are not trusted. */
+const PRODUCTION_CLIENT_ORIGIN = "https://wedplan-client-zeta.vercel.app"
 
 function trimTrailingSlashes(value: string): string {
   return value.replace(/\/+$/, "")
 }
 
-function isLocalOrigin(value: string): boolean {
-  return /^https?:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?\/?$/i.test(value)
+export function isLocalOrigin(value: string): boolean {
+  try {
+    const url = new URL(value)
+    return (
+      (url.protocol === "http:" || url.protocol === "https:") &&
+      (url.hostname === "localhost" || url.hostname === "127.0.0.1")
+    )
+  } catch {
+    return false
+  }
 }
 
 /** Vercel exposes its deployment host without a scheme. */
@@ -54,8 +66,28 @@ function resolvePublicOrigin(configured: string | undefined, fallback: string): 
  * owns that path and proxies it to this Express server, so the base URL must
  * stay the browser-facing origin (used for OAuth callbacks and cookies).
  */
+/**
+ * The browser-facing origin that serves `/api/auth`. The Next.js app owns that
+ * path and proxies it to this API, so in production this must be the client
+ * origin (not the backend's Vercel host). Local development keeps its explicit
+ * localhost value so cookies and JWKS URLs resolve correctly.
+ */
+export function getBrowserAuthUrl(): string {
+  const configured = process.env.BETTER_AUTH_URL?.trim()
+
+  if (configured && !isLocalOrigin(configured)) return trimTrailingSlashes(configured)
+
+  if (process.env.NODE_ENV === "production") {
+    const client = process.env.CLIENT_URL?.trim()
+    if (client && !isLocalOrigin(client)) return trimTrailingSlashes(client)
+    return PRODUCTION_CLIENT_ORIGIN
+  }
+
+  return trimTrailingSlashes(configured || DEFAULT_AUTH_URL)
+}
+
 export function getAuthBaseUrl(): string {
-  return resolvePublicOrigin(process.env.BETTER_AUTH_URL, DEFAULT_AUTH_URL)
+  return getBrowserAuthUrl()
 }
 
 export function getClientUrl(): string {
@@ -63,9 +95,27 @@ export function getClientUrl(): string {
 }
 
 export function getTrustedOrigins(): string[] {
-  // Includes the browser-facing auth and client origins; in development both
-  // resolve to localhost, while production uses the configured Vercel origin.
-  return Array.from(new Set([getAuthBaseUrl(), getClientUrl()]))
+  const origins = new Set<string>()
+
+  // Only explicitly configured, non-local origins are trusted from the
+  // environment. VERCEL_URL is deliberately not used here: on preview
+  // deployments it would trust an untrusted preview host.
+  for (const configured of [process.env.BETTER_AUTH_URL, process.env.CLIENT_URL]) {
+    const value = configured?.trim()
+    if (value && !isLocalOrigin(value)) {
+      origins.add(trimTrailingSlashes(value))
+    }
+  }
+
+  if (process.env.NODE_ENV === "production") {
+    // The known frontend production origin, independent of the backend's
+    // VERCEL_* values (which describe this server, not the browser origin).
+    origins.add(PRODUCTION_CLIENT_ORIGIN)
+  } else {
+    origins.add(LOCAL_CLIENT_ORIGIN)
+  }
+
+  return Array.from(origins)
 }
 
 function googleProvider():
@@ -83,6 +133,10 @@ function googleProvider():
 
 async function createAuth() {
   const db = await getDb()
+  // Explicit values keep issuance and verification identical across local and
+  // Vercel deployments (Vercel host names vary per preview deployment).
+  const jwtIssuer = process.env.JWT_ISSUER?.trim() || getAuthBaseUrl()
+  const jwtAudience = process.env.JWT_AUDIENCE?.trim() || getAuthBaseUrl()
 
   return betterAuth({
     appName: "WedPlan",
@@ -90,6 +144,23 @@ async function createAuth() {
     secret: process.env.BETTER_AUTH_SECRET,
     trustedOrigins: getTrustedOrigins(),
     database: mongodbAdapter(db, { usePlural: true }),
+    plugins: [
+      jwt({
+        jwt: {
+          issuer: jwtIssuer,
+          audience: jwtAudience,
+          expirationTime: "15m",
+          /**
+           * Keep the token free of user data. The Express verifier resolves
+           * `sub` against MongoDB and derives the role there — a role claim in
+           * a token is never trusted.
+           */
+          definePayload: () => ({}),
+        },
+        // jwks options are deliberately left at their secure defaults:
+        // EdDSA/Ed25519 keys and private keys encrypted with BETTER_AUTH_SECRET.
+      }),
+    ],
     emailAndPassword: {
       enabled: true,
       autoSignIn: true,

@@ -2,11 +2,14 @@ import express, { type NextFunction, type Request, type Response } from "express
 import cors from "cors";
 import helmet from "helmet";
 
+import { checkoutDiagFor, safeErrorInfo } from "./lib/checkout-diagnostics.js";
+import { stripeWebhookHandler } from "./controllers/stripe-webhook.controller.js";
 import { getAuthHandler, getTrustedOrigins } from "./lib/auth.js";
 import accountRouter from "./routes/account.routes.js";
 import adminRouter from "./routes/admin.routes.js";
 import bookingRouter from "./routes/booking.routes.js";
 import servicesRouter from "./routes/services.routes.js";
+import stripeRouter from "./routes/stripe.routes.js";
 import vendorRouter from "./routes/vendor.routes.js";
 
 const app = express();
@@ -35,6 +38,12 @@ app.all("/api/auth/*splat", async (req, res, next) => {
   }
 });
 
+/**
+ * Stripe must receive the raw request body to verify its signature. This is
+ * mounted before express.json(); other JSON API routes are unaffected.
+ */
+app.post("/api/stripe/webhook", express.raw({ type: "application/json" }), stripeWebhookHandler);
+
 app.use(express.json());
 
 app.get("/api/health", (_req, res) => {
@@ -45,6 +54,7 @@ app.get("/api/health", (_req, res) => {
 });
 
 app.use("/api/services", servicesRouter);
+app.use("/api/stripe", stripeRouter);
 app.use("/api/account", accountRouter);
 app.use("/api/vendor", vendorRouter);
 app.use("/api/bookings", bookingRouter);
@@ -58,10 +68,16 @@ app.use((_req: Request, res: Response) => {
 });
 
 app.use((error: unknown, _req: Request, res: Response, next: NextFunction) => {
+  // Sanitized: never emit error messages, which can contain connection strings.
+  const info = safeErrorInfo(error);
   console.error(
     "[wedplan-api]",
-    error instanceof Error ? error.message : "Unexpected server error"
+    JSON.stringify({ errorName: info.errorName, errorCode: info.errorCode })
   );
+  checkoutDiagFor(res, "backend-final-error", {
+    errorName: info.errorName,
+    errorCode: info.errorCode,
+  });
 
   if (res.headersSent) {
     next(error);

@@ -5,6 +5,7 @@ import { z } from "zod"
 import { getDb } from "../lib/mongodb.js"
 import { requireRole } from "../middleware/auth.js"
 import { listBookings } from "../services/bookings.service.js"
+import { approveService } from "../services/service-approval.service.js"
 import { listVendorProfiles } from "../services/vendors.service.js"
 import type { ServiceRecord } from "../types/service.js"
 import { normalizeUserRole } from "../types/auth.js"
@@ -138,20 +139,22 @@ adminRouter.patch("/services/:id/approval", async (req, res, next) => {
   }
 
   try {
-    const db = await getDb()
-    const result = await db.collection<AdminServiceDocument>("services").updateOne(
-      serviceIdFilter(parsedId.data),
-      {
-        $set: {
-          status: parsedBody.data.status,
-          isActive: parsedBody.data.status === "approved",
-          updatedAt: new Date(),
-        },
-      },
-    )
+    const result = await approveService(parsedId.data, parsedBody.data.status)
 
-    if (result.matchedCount === 0) {
-      res.status(404).json({ success: false, message: "Service not found." })
+    if (!result.ok) {
+      if (result.reason === "not_found") {
+        res.status(404).json({ success: false, message: "Service not found." })
+        return
+      }
+
+      const { plan, activeCount, limit } = result.quota
+      res.status(403).json({
+        success: false,
+        message:
+          "This vendor has reached the Free Plan limit of 3 active services. " +
+          "Remove an active service or upgrade the vendor to Premium before approving another.",
+        data: { plan, activeCount, limit },
+      })
       return
     }
 

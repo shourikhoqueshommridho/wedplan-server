@@ -1,4 +1,4 @@
-import { MongoClient, type Db } from "mongodb"
+import { MongoClient, type ClientSession, type Db } from "mongodb"
 
 const DEFAULT_DB_NAME = "wedplan"
 
@@ -42,6 +42,28 @@ function getClient(): Promise<MongoClient> {
 export async function getDb(): Promise<Db> {
   const client = await getClient()
   return client.db(process.env.MONGODB_DB?.trim() || DEFAULT_DB_NAME)
+}
+
+/**
+ * Runs work inside a MongoDB transaction. Deployment must use a replica set
+ * (Atlas provides one); a standalone development server does not support
+ * transactions.
+ */
+export async function withMongoTransaction<T>(
+  work: (session: ClientSession) => Promise<T>,
+): Promise<T> {
+  const client = await getClient()
+  const session = client.startSession()
+
+  try {
+    let result!: T
+    await session.withTransaction(async () => {
+      result = await work(session)
+    })
+    return result
+  } finally {
+    await session.endSession()
+  }
 }
 
 /**

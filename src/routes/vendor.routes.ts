@@ -3,6 +3,7 @@ import { ObjectId, type Filter, type WithId } from "mongodb"
 
 import { getDb } from "../lib/mongodb.js"
 import { requireRole } from "../middleware/auth.js"
+import { assertCanCreateActiveService } from "../services/subscriptions.service.js"
 import { getVendorProfile, upsertVendorProfile } from "../services/vendors.service.js"
 import type { ServiceRecord } from "../types/service.js"
 import {
@@ -150,6 +151,22 @@ vendorRouter.post("/services", async (req, res, next) => {
   }
 
   try {
+    // Free plan quota is enforced here, not in the browser.
+    const entitlement = await assertCanCreateActiveService(req.auth!.user.id)
+    if (!entitlement.allowed) {
+      res.status(403).json({
+        success: false,
+        message:
+          "Free plan allows a maximum of 3 active services. Upgrade to Premium to add more.",
+        data: {
+          plan: entitlement.plan,
+          activeServices: entitlement.activeCount,
+          limit: entitlement.limit,
+        },
+      })
+      return
+    }
+
     const profile = await getVendorProfile(req.auth!.user.id)
     const now = new Date()
     const document: VendorServiceDocument = {
@@ -232,6 +249,25 @@ vendorRouter.patch("/services/:id", async (req, res, next) => {
     }
 
     const isInactive = existing.status === "inactive" || !existing.isActive
+    const willActivate = isInactive && (contentFieldsChanged || updateData.isActive === true)
+
+    if (willActivate) {
+      // Reactivating a delisted listing consumes a free-plan slot too.
+      const entitlement = await assertCanCreateActiveService(req.auth!.user.id)
+      if (!entitlement.allowed) {
+        res.status(403).json({
+          success: false,
+          message:
+            "Free plan allows a maximum of 3 active services. Upgrade to Premium to reactivate this service.",
+          data: {
+            plan: entitlement.plan,
+            activeServices: entitlement.activeCount,
+            limit: entitlement.limit,
+          },
+        })
+        return
+      }
+    }
 
     if (contentFieldsChanged) {
       // Any content edit must go back through admin review before going public.
