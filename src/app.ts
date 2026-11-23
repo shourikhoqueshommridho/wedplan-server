@@ -10,6 +10,7 @@ import adminRouter from "./routes/admin.routes.js";
 import bookingRouter from "./routes/booking.routes.js";
 import servicesRouter from "./routes/services.routes.js";
 import stripeRouter from "./routes/stripe.routes.js";
+import uploadRouter from "./routes/upload.routes.js";
 import vendorRouter from "./routes/vendor.routes.js";
 
 const app = express();
@@ -56,6 +57,7 @@ app.get("/api/health", (_req, res) => {
 app.use("/api/services", servicesRouter);
 app.use("/api/stripe", stripeRouter);
 app.use("/api/account", accountRouter);
+app.use("/api/vendor/uploads", uploadRouter);
 app.use("/api/vendor", vendorRouter);
 app.use("/api/bookings", bookingRouter);
 app.use("/api/admin", adminRouter);

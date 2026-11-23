@@ -8,6 +8,7 @@
     "helmet": "^8.3.0",
     "jose": "^6.2.17",
     "mongodb": "^7.9.0",
+    "multer": "^2.5.0",
     "stripe": "^23.1.0",
     "zod": "^4.6.7"
   },
@@ -16,7 +17,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "node --import tsx --test src/tests/jwt.test.ts src/tests/admin.test.ts src/tests/stripe-subscription.test.ts",
+    "test": "node --import tsx --test src/tests/jwt.test.ts src/tests/admin.test.ts src/tests/image-upload.test.ts src/tests/stripe-subscription.test.ts",
     "dev": "tsx watch src/server.ts",
     "build": "node ./node_modules/typescript/bin/tsc",
     "start": "node dist/server.js",
@@ -29,6 +30,7 @@
   "devDependencies": {
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
+    "@types/multer": "^2.3.0",
     "@types/node": "^26.6.6",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2"
