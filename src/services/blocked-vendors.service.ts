@@ -19,22 +19,25 @@ export interface BlockedVendorDeps {
   findBlockedUsers(): Promise<BlockedVendorCandidate[]>
 }
 
+/** The same block flags used by the account-level middleware and admin tools. */
+export const BLOCKED_USER_FILTER: Filter<BlockedVendorCandidate> = {
+  $or: [
+    { blocked: true },
+    { isBlocked: true },
+    { banned: true },
+    { suspended: true },
+    { status: { $in: ["blocked", "banned", "suspended"] } },
+    { accountStatus: "blocked" },
+  ],
+}
+
 const defaultDeps: BlockedVendorDeps = {
   findBlockedUsers: async () => {
     const db = await getDb()
     return db
       .collection<BlockedVendorCandidate>("users")
       .find(
-        {
-          $or: [
-            { blocked: true },
-            { isBlocked: true },
-            { banned: true },
-            { suspended: true },
-            { status: { $in: ["blocked", "banned", "suspended"] } },
-            { accountStatus: "blocked" },
-          ],
-        },
+        BLOCKED_USER_FILTER,
         {
           projection: {
             _id: 1,

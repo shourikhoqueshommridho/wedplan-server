@@ -12,8 +12,9 @@ import {
 } from "../lib/vendor-intent.js"
 import { requireAuth, requireRole } from "../middleware/auth.js"
 import { requireActiveUser } from "../middleware/blocked.js"
+import { listAdminUsers } from "../services/admin.service.js"
 import { upsertVendorProfile } from "../services/vendors.service.js"
-import { normalizeUserRole } from "../types/auth.js"
+import { adminUsersQuerySchema } from "../validators/admin.js"
 import {
   vendorBusinessDetailsSchema,
   vendorRegistrationSchema,
@@ -237,53 +238,26 @@ accountRouter.get("/me", requireAuth, requireActiveUser, (req, res) => {
   })
 })
 
-accountRouter.get("/admin/users", requireRole("admin"), requireActiveUser, async (_req, res) => {
-  const db = await getDb()
-  const documents = await db
-    .collection("users")
-    .find(
-      {},
-      {
-        projection: {
-          _id: 1,
-          name: 1,
-          email: 1,
-          image: 1,
-          role: 1,
-          createdAt: 1,
-          blocked: 1,
-          blockedAt: 1,
-        },
-      },
-    )
-    .sort({ createdAt: -1 })
-    .limit(100)
-    .toArray()
+accountRouter.get("/admin/users", requireRole("admin"), requireActiveUser, async (req, res) => {
+  const parsed = adminUsersQuerySchema.safeParse(req.query)
 
-  const users = documents.map((document) => ({
-    id: String(document._id),
-    name: typeof document.name === "string" ? document.name : "Unnamed user",
-    email: typeof document.email === "string" ? document.email : "",
-    image: typeof document.image === "string" ? document.image : null,
-    role: normalizeUserRole(document.role),
-    blocked: document.blocked === true,
-    blockedAt:
-      document.blockedAt instanceof Date
-        ? document.blockedAt.toISOString()
-        : typeof document.blockedAt === "string"
-          ? document.blockedAt
-          : null,
-    createdAt:
-      document.createdAt instanceof Date
-        ? document.createdAt.toISOString()
-        : typeof document.createdAt === "string"
-          ? document.createdAt
-          : null,
-  }))
+  if (!parsed.success) {
+    res.status(400).json({
+      success: false,
+      message: parsed.error.issues[0]?.message ?? "Invalid user filters.",
+      errors: parsed.error.issues.map((issue) => ({
+        field: issue.path.map(String).join("."),
+        message: issue.message,
+      })),
+    })
+    return
+  }
+
+  const result = await listAdminUsers(parsed.data)
 
   res.status(200).json({
     success: true,
-    data: { users },
+    data: { users: result.users, meta: result.meta },
   })
 })
 

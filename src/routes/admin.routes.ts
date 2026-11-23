@@ -6,8 +6,10 @@ import { idFilter } from "../lib/object-id.js"
 import { getDb } from "../lib/mongodb.js"
 import { requireRole } from "../middleware/auth.js"
 import { requireActiveUser } from "../middleware/blocked.js"
+import { getAdminOverview } from "../services/admin-overview.service.js"
 import {
   deleteAdminService,
+  getAdminUserById,
   listAdminTransactions,
   setUserBlocked,
 } from "../services/admin.service.js"
@@ -266,6 +268,37 @@ adminRouter.delete("/services/:id", async (req, res, next) => {
     }
 
     res.status(200).json({ success: true, data: { message: "Service deleted." } })
+  } catch (error) {
+    next(error)
+  }
+})
+
+adminRouter.get("/overview", async (_req, res, next) => {
+  try {
+    const overview = await getAdminOverview()
+    res.status(200).json({ success: true, data: overview })
+  } catch (error) {
+    next(error)
+  }
+})
+
+adminRouter.get("/users/:id", async (req, res, next) => {
+  const parsedId = objectIdSchema.safeParse(req.params.id)
+
+  if (!parsedId.success) {
+    res.status(400).json({ success: false, message: "Invalid user ID." })
+    return
+  }
+
+  try {
+    const user = await getAdminUserById(parsedId.data)
+
+    if (!user) {
+      res.status(404).json({ success: false, message: "User not found." })
+      return
+    }
+
+    res.status(200).json({ success: true, data: { user } })
   } catch (error) {
     next(error)
   }
