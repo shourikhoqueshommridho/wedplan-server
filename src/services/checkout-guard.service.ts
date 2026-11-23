@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto"
-import type { Filter } from "mongodb"
+import type { Collection, Filter } from "mongodb"
 
 import { getDb } from "../lib/mongodb.js"
 import type { SubscriptionRecord } from "../types/subscription.js"
@@ -46,43 +46,60 @@ export function checkoutClaimFilter(vendorId: string, now: Date): Filter<Subscri
   } as Filter<SubscriptionRecord>
 }
 
+/**
+ * Atomic claim used by the default deps. `returnDocument: "after"` is required:
+ * without it an upsert returns `null` (the pre-image) even though the reservation
+ * was written, which previously produced a false "checkout in progress" error.
+ */
+export async function claimCheckoutReservation(
+  collection: Collection<SubscriptionRecord>,
+  vendorId: string,
+  requestId: string,
+  expiresAt: Date,
+  now: Date = new Date(),
+): Promise<boolean> {
+  try {
+    const result = await collection.findOneAndUpdate(
+      checkoutClaimFilter(vendorId, now),
+      {
+        $set: {
+          checkoutRequestId: requestId,
+          checkoutReservationExpiresAt: expiresAt,
+          updatedAt: now,
+        },
+        $setOnInsert: {
+          vendorId,
+          plan: "free",
+          status: "incomplete",
+          createdAt: now,
+        },
+      },
+      { upsert: true, returnDocument: "after" },
+    )
+    return result !== null
+  } catch (error) {
+    // Two instances racing an upsert: the unique vendor index rejects one.
+    if (
+      error instanceof Error &&
+      error.name === "MongoServerError" &&
+      (error as { code?: number }).code === 11000
+    ) {
+      return false
+    }
+    throw error
+  }
+}
+
 const defaultDeps: CheckoutGuardDeps = {
   claim: async (vendorId, requestId, expiresAt) => {
     await ensureIndexes()
     const db = await getDb()
-    const now = new Date()
-    try {
-      const result = await db
-        .collection<SubscriptionRecord>("subscriptions")
-        .findOneAndUpdate(
-          checkoutClaimFilter(vendorId, now),
-          {
-            $set: {
-              checkoutRequestId: requestId,
-              checkoutReservationExpiresAt: expiresAt,
-              updatedAt: now,
-            },
-            $setOnInsert: {
-              vendorId,
-              plan: "free",
-              status: "incomplete",
-              createdAt: now,
-            },
-          },
-          { upsert: true },
-        )
-      return result !== null
-    } catch (error) {
-      // Two instances racing an upsert: the unique vendor index rejects one.
-      if (
-        error instanceof Error &&
-        error.name === "MongoServerError" &&
-        (error as { code?: number }).code === 11000
-      ) {
-        return false
-      }
-      throw error
-    }
+    return claimCheckoutReservation(
+      db.collection<SubscriptionRecord>("subscriptions"),
+      vendorId,
+      requestId,
+      expiresAt,
+    )
   },
 
   release: async (vendorId, requestId) => {
